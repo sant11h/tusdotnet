@@ -92,8 +92,7 @@ namespace tusdotnet.Stores
             _deletePartialFilesOnConcat = deletePartialFilesOnConcat;
             _fileRepFactory = new InternalFileRep.FileRepFactory(_directoryPath);
 
-            if (bufferSize == null)
-                bufferSize = TusDiskBufferSize.Default;
+            bufferSize ??= TusDiskBufferSize.Default;
 
             _maxWriteBufferSize = bufferSize.WriteBufferSizeInBytes;
             _maxReadBufferSize = bufferSize.ReadBufferSizeInBytes;
@@ -112,7 +111,7 @@ namespace tusdotnet.Stores
         {
             var firstLine = _fileRepFactory.UploadLength(await InternalFileId.Parse(_fileIdProvider, fileId)).ReadFirstLine(true);
             return firstLine == null
-                ? (long?)null
+                ? null
                 : long.Parse(firstLine);
         }
 
@@ -186,13 +185,16 @@ namespace tusdotnet.Stores
                 var chunkPositionFile = _fileRepFactory.ChunkStartPosition(internalFileId);
                 var chunkStartPosition = chunkPositionFile.ReadFirstLineAsLong(true, 0);
                 var chunkCompleteFile = _fileRepFactory.ChunkComplete(internalFileId);
+                var chunkChecksumFile = _fileRepFactory.ChunkChecksum(internalFileId);
 
                 // Only verify the checksum if the entire lastest chunk has been written.
                 // If not, just discard the last chunk as it won't match the checksum anyway.
                 // If the client has provided a faulty checksum-trailer we should also just discard the chunk.
                 if (chunkCompleteFile.Exist() && !ChecksumTrailerHelper.IsFallback(algorithm, checksum))
                 {
-                    var calculateSha1 = dataStream.CalculateSha1(chunkStartPosition);
+                    // If we don't have the optimized checksum file calculate it from the file stream.
+                    var calculateSha1 = chunkChecksumFile.ReadBytes(fileIsOptional: true) ?? dataStream.CalculateSha1(chunkStartPosition);
+
                     valid = checksum.SequenceEqual(calculateSha1);
                 }
 
@@ -341,6 +343,8 @@ namespace tusdotnet.Stores
         {
             var chunkComplete = _fileRepFactory.ChunkComplete(internalFileId);
             chunkComplete.Delete();
+
+            _fileRepFactory.ChunkChecksum(internalFileId).Delete();
             _fileRepFactory.ChunkStartPosition(internalFileId).Write(totalDiskFileLength.ToString());
 
             return chunkComplete;

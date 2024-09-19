@@ -3,7 +3,9 @@ using System.IO;
 using System.Threading;
 using System.Threading.Tasks;
 using tusdotnet.Extensions;
+using tusdotnet.Extensions.Store;
 using tusdotnet.Models;
+using tusdotnet.Stores.Hashers;
 
 namespace tusdotnet.Stores
 {
@@ -27,6 +29,8 @@ namespace tusdotnet.Stores
                 {
                     return 0;
                 }
+
+                using var hasher = TusDiskStoreHasher.Create(stream.GetUploadChecksumInfo()?.Algorithm);
 
                 var chunkCompleteFile = InitializeChunk(internalFileId, totalDiskFileLength);
 
@@ -56,6 +60,9 @@ namespace tusdotnet.Stores
                     if (writeBufferNextFreeIndex + numberOfbytesReadFromClient > _maxWriteBufferSize)
                     {
                         await diskFileStream.FlushFileToDisk(fileWriteBuffer, writeBufferNextFreeIndex);
+
+                        hasher.Append(fileWriteBuffer, writeBufferNextFreeIndex);
+
                         writeBufferNextFreeIndex = 0;
                     }
 
@@ -73,10 +80,19 @@ namespace tusdotnet.Stores
 
                 // Flush the remaining buffer to disk.
                 if (writeBufferNextFreeIndex != 0)
+                {
                     await diskFileStream.FlushFileToDisk(fileWriteBuffer, writeBufferNextFreeIndex);
+                    hasher.Append(fileWriteBuffer, writeBufferNextFreeIndex);
+                }
 
                 if (!clientDisconnectedDuringRead)
                 {
+                    var finalChecksum = hasher.GetHashAndReset();
+                    if (finalChecksum is not null)
+                    {
+                        _fileRepFactory.ChunkChecksum(internalFileId).Write(finalChecksum);
+                    }
+
                     MarkChunkComplete(chunkCompleteFile);
                 }
 
